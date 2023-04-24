@@ -1,252 +1,252 @@
 package com.topjohnwu.magisk.ui
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.os.Bundle
-import androidx.appcompat.app.AlertDialog
-import androidx.core.view.GravityCompat
-import androidx.fragment.app.Fragment
-import androidx.fragment.app.FragmentTransaction
-import com.ncapdevi.fragnav.FragNavController
-import com.ncapdevi.fragnav.FragNavTransactionOptions
-import com.topjohnwu.magisk.Const
-import com.topjohnwu.magisk.Const.Key.OPEN_SECTION
-import com.topjohnwu.magisk.Info
+import android.view.MenuItem
+import android.view.View
+import android.view.WindowManager
+import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.view.forEach
+import androidx.core.view.isGone
+import androidx.core.view.isVisible
+import androidx.lifecycle.lifecycleScope
+import androidx.navigation.NavDirections
+import com.topjohnwu.magisk.MainDirections
 import com.topjohnwu.magisk.R
-import com.topjohnwu.magisk.base.BaseActivity
-import com.topjohnwu.magisk.base.BaseFragment
-import com.topjohnwu.magisk.databinding.ActivityMainBinding
-import com.topjohnwu.magisk.extensions.addOnPropertyChangedCallback
-import com.topjohnwu.magisk.extensions.snackbar
-import com.topjohnwu.magisk.intent
-import com.topjohnwu.magisk.model.events.*
-import com.topjohnwu.magisk.model.navigation.MagiskAnimBuilder
-import com.topjohnwu.magisk.model.navigation.MagiskNavigationEvent
-import com.topjohnwu.magisk.model.navigation.Navigation
-import com.topjohnwu.magisk.model.navigation.Navigator
-import com.topjohnwu.magisk.ui.hide.MagiskHideFragment
-import com.topjohnwu.magisk.ui.home.HomeFragment
-import com.topjohnwu.magisk.ui.log.LogFragment
-import com.topjohnwu.magisk.ui.module.ModulesFragment
-import com.topjohnwu.magisk.ui.module.ReposFragment
-import com.topjohnwu.magisk.ui.settings.SettingsFragment
-import com.topjohnwu.magisk.ui.superuser.SuperuserFragment
-import com.topjohnwu.magisk.utils.Utils
-import org.koin.androidx.viewmodel.ext.android.viewModel
-import timber.log.Timber
-import kotlin.reflect.KClass
+import com.topjohnwu.magisk.arch.BaseViewModel
+import com.topjohnwu.magisk.arch.startAnimations
+import com.topjohnwu.magisk.arch.viewModel
+import com.topjohnwu.magisk.core.Config
+import com.topjohnwu.magisk.core.Const
+import com.topjohnwu.magisk.core.Info
+import com.topjohnwu.magisk.core.isRunningAsStub
+import com.topjohnwu.magisk.core.model.module.LocalModule
+import com.topjohnwu.magisk.core.tasks.HideAPK
+import com.topjohnwu.magisk.databinding.ActivityMainMd2Binding
+import com.topjohnwu.magisk.ui.home.HomeFragmentDirections
+import com.topjohnwu.magisk.view.MagiskDialog
+import com.topjohnwu.magisk.view.Shortcuts
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import java.io.File
 
-open class MainActivity : BaseActivity<MainViewModel, ActivityMainBinding>(), Navigator,
-        FragNavController.RootFragmentListener, FragNavController.TransactionListener {
+class MainViewModel : BaseViewModel()
 
-    override val layoutRes: Int = R.layout.activity_main
-    override val viewModel: MainViewModel by viewModel()
-    private val navHostId: Int = R.id.main_nav_host
-    private val defaultPosition: Int = 0
+class MainActivity : SplashActivity<ActivityMainMd2Binding>() {
 
-    private val navigationController by lazy {
-        FragNavController(supportFragmentManager, navHostId)
-    }
-    private val isRootFragment get() =
-        navigationController.currentStackIndex != defaultPosition
-
-    override val baseFragments: List<KClass<out Fragment>> = listOf(
-        HomeFragment::class,
-        SuperuserFragment::class,
-        MagiskHideFragment::class,
-        ModulesFragment::class,
-        ReposFragment::class,
-        LogFragment::class,
-        SettingsFragment::class
-    )
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        if (!SplashActivity.DONE) {
-            startActivity(intent<SplashActivity>())
-            finish()
+    override val layoutRes = R.layout.activity_main_md2
+    override val viewModel by viewModel<MainViewModel>()
+    override val navHostId: Int = R.id.main_nav_host
+    override val snackbarView: View
+        get() {
+            val fragmentOverride = currentFragment?.snackbarView
+            return fragmentOverride ?: super.snackbarView
         }
-
-        super.onCreate(savedInstanceState)
-
-        if (Info.env.isUnsupported && !viewModel.shownUnsupportedDialog) {
-            viewModel.shownUnsupportedDialog = true
-            AlertDialog.Builder(this)
-                .setTitle(R.string.unsupport_magisk_title)
-                .setMessage(getString(R.string.unsupport_magisk_msg, Const.Version.MIN_VERSION))
-                .setPositiveButton(android.R.string.ok, null)
-                .show()
-        }
-
-        navigationController.apply {
-            rootFragmentListener = this@MainActivity
-            transactionListener = this@MainActivity
-            initialize(defaultPosition, savedInstanceState)
-        }
-
-        checkHideSection()
-        setSupportActionBar(binding.mainInclude.mainToolbar)
-
-        viewModel.isConnected.addOnPropertyChangedCallback {
-            checkHideSection()
-        }
-
-        if (savedInstanceState == null) {
-            intent.getStringExtra(OPEN_SECTION)?.let {
-                onEventDispatched(Navigation.fromSection(it))
+    override val snackbarAnchorView: View?
+        get() {
+            val fragmentAnchor = currentFragment?.snackbarAnchorView
+            return when {
+                fragmentAnchor?.isVisible == true -> fragmentAnchor
+                binding.mainNavigation.isVisible -> return binding.mainNavigation
+                else -> null
             }
         }
+
+    private var isRootFragment = true
+
+    @SuppressLint("InlinedApi")
+    override fun showMainUI(savedInstanceState: Bundle?) {
+        setContentView()
+        showUnsupportedMessage()
+        askForHomeShortcut()
+        checkStubComponent()
+
+        // Ask permission to post notifications for background update check
+        if (Config.checkUpdate) {
+            withPermission(Manifest.permission.POST_NOTIFICATIONS) {
+                Config.checkUpdate = it
+            }
+        }
+
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+
+        navigation.addOnDestinationChangedListener { _, destination, _ ->
+            isRootFragment = when (destination.id) {
+                R.id.homeFragment,
+                R.id.modulesFragment,
+                R.id.superuserFragment,
+                R.id.logFragment -> true
+                else -> false
+            }
+
+            setDisplayHomeAsUpEnabled(!isRootFragment)
+            requestNavigationHidden(!isRootFragment)
+
+            binding.mainNavigation.menu.forEach {
+                if (it.itemId == destination.id) {
+                    it.isChecked = true
+                }
+            }
+        }
+
+        setSupportActionBar(binding.mainToolbar)
+
+        binding.mainNavigation.setOnItemSelectedListener {
+            getScreen(it.itemId)?.navigate()
+            true
+        }
+        binding.mainNavigation.setOnItemReselectedListener {
+            // https://issuetracker.google.com/issues/124538620
+        }
+        binding.mainNavigation.menu.apply {
+            findItem(R.id.superuserFragment)?.isEnabled = Info.showSuperUser
+            findItem(R.id.modulesFragment)?.isEnabled = Info.env.isActive && LocalModule.loaded()
+        }
+
+        val section =
+            if (intent.action == Intent.ACTION_APPLICATION_PREFERENCES)
+                Const.Nav.SETTINGS
+            else
+                intent.getStringExtra(Const.Key.OPEN_SECTION)
+
+        getScreen(section)?.navigate()
+
+        if (!isRootFragment) {
+            requestNavigationHidden(requiresAnimation = savedInstanceState == null)
+        }
     }
 
-    override fun onSaveInstanceState(outState: Bundle) {
-        super.onSaveInstanceState(outState)
-        navigationController.onSaveInstanceState(outState)
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        when (item.itemId) {
+            android.R.id.home -> onBackPressed()
+            else -> return super.onOptionsItemSelected(item)
+        }
+        return true
     }
 
-    override fun setTitle(title: CharSequence?) {
-        supportActionBar?.title = title
+    fun setDisplayHomeAsUpEnabled(isEnabled: Boolean) {
+        binding.mainToolbar.startAnimations()
+        when {
+            isEnabled -> binding.mainToolbar.setNavigationIcon(R.drawable.ic_back_md2)
+            else -> binding.mainToolbar.navigationIcon = null
+        }
     }
 
-    override fun setTitle(titleId: Int) {
-        supportActionBar?.setTitle(titleId)
-    }
-
-    override fun onBackPressed() {
-        if (binding.drawerLayout.isDrawerOpen(binding.navView)) {
-            binding.drawerLayout.closeDrawer(binding.navView)
+    internal fun requestNavigationHidden(hide: Boolean = true, requiresAnimation: Boolean = true) {
+        val bottomView = binding.mainNavigation
+        if (requiresAnimation) {
+            bottomView.isVisible = true
+            bottomView.isHidden = hide
         } else {
-            val fragment = navigationController.currentFrag as? BaseFragment<*, *>
+            bottomView.isGone = hide
+        }
+    }
 
-            if (fragment?.onBackPressed() == true) {
-                return
-            }
+    fun invalidateToolbar() {
+        //binding.mainToolbar.startAnimations()
+        binding.mainToolbar.invalidate()
+    }
 
-            try {
-                navigationController.popFragment()
-            } catch (e: UnsupportedOperationException) {
-                when {
-                    isRootFragment -> {
-                        val options = FragNavTransactionOptions.newBuilder()
-                                .transition(FragmentTransaction.TRANSIT_FRAGMENT_CLOSE)
-                                .build()
-                        navigationController.switchTab(defaultPosition, options)
+    private fun getScreen(name: String?): NavDirections? {
+        return when (name) {
+            Const.Nav.SUPERUSER -> MainDirections.actionSuperuserFragment()
+            Const.Nav.MODULES -> MainDirections.actionModuleFragment()
+            Const.Nav.SETTINGS -> HomeFragmentDirections.actionHomeFragmentToSettingsFragment()
+            else -> null
+        }
+    }
+
+    private fun getScreen(id: Int): NavDirections? {
+        return when (id) {
+            R.id.homeFragment -> MainDirections.actionHomeFragment()
+            R.id.modulesFragment -> MainDirections.actionModuleFragment()
+            R.id.superuserFragment -> MainDirections.actionSuperuserFragment()
+            R.id.logFragment -> MainDirections.actionLogFragment()
+            else -> null
+        }
+    }
+
+    private fun showUnsupportedMessage() {
+        if (Info.env.isUnsupported) {
+            MagiskDialog(this).apply {
+                setTitle(R.string.unsupport_magisk_title)
+                setMessage(R.string.unsupport_magisk_msg, Const.Version.MIN_VERSION)
+                setButton(MagiskDialog.ButtonType.POSITIVE) { text = android.R.string.ok }
+                setCancelable(false)
+            }.show()
+        }
+
+        if (!Info.isEmulator && Info.env.isActive && System.getenv("PATH")
+                ?.split(':')
+                ?.filterNot { File("$it/magisk").exists() }
+                ?.any { File("$it/su").exists() } == true) {
+            MagiskDialog(this).apply {
+                setTitle(R.string.unsupport_general_title)
+                setMessage(R.string.unsupport_other_su_msg)
+                setButton(MagiskDialog.ButtonType.POSITIVE) { text = android.R.string.ok }
+                setCancelable(false)
+            }.show()
+        }
+
+        if (applicationInfo.flags and ApplicationInfo.FLAG_SYSTEM != 0) {
+            MagiskDialog(this).apply {
+                setTitle(R.string.unsupport_general_title)
+                setMessage(R.string.unsupport_system_app_msg)
+                setButton(MagiskDialog.ButtonType.POSITIVE) { text = android.R.string.ok }
+                setCancelable(false)
+            }.show()
+        }
+
+        if (applicationInfo.flags and ApplicationInfo.FLAG_EXTERNAL_STORAGE != 0) {
+            MagiskDialog(this).apply {
+                setTitle(R.string.unsupport_general_title)
+                setMessage(R.string.unsupport_external_storage_msg)
+                setButton(MagiskDialog.ButtonType.POSITIVE) { text = android.R.string.ok }
+                setCancelable(false)
+            }.show()
+        }
+    }
+
+    private fun askForHomeShortcut() {
+        if (isRunningAsStub && !Config.askedHome &&
+            ShortcutManagerCompat.isRequestPinShortcutSupported(this)) {
+            // Ask and show dialog
+            Config.askedHome = true
+            MagiskDialog(this).apply {
+                setTitle(R.string.add_shortcut_title)
+                setMessage(R.string.add_shortcut_msg)
+                setButton(MagiskDialog.ButtonType.NEGATIVE) {
+                    text = android.R.string.cancel
+                }
+                setButton(MagiskDialog.ButtonType.POSITIVE) {
+                    text = android.R.string.ok
+                    onClick {
+                        Shortcuts.addHomeIcon(this@MainActivity)
                     }
-                    else -> super.onBackPressed()
+                }
+                setCancelable(true)
+            }.show()
+        }
+    }
+
+    @SuppressLint("InlinedApi")
+    private fun checkStubComponent() {
+        if (intent.component?.className?.contains(HideAPK.PLACEHOLDER) == true) {
+            // The stub APK was not properly patched, re-apply our changes
+            withPermission(Manifest.permission.REQUEST_INSTALL_PACKAGES) { granted ->
+                if (granted) {
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        val apk = File(applicationInfo.sourceDir)
+                        HideAPK.upgrade(this@MainActivity, apk)?.let {
+                            startActivity(it)
+                        }
+                    }
                 }
             }
         }
     }
 
-    override fun onEventDispatched(event: ViewEvent) {
-        super.onEventDispatched(event)
-        when (event) {
-            is SnackbarEvent -> snackbar(snackbarView, event.message(this), event.length, event.f)
-            is BackPressEvent -> onBackPressed()
-            is MagiskNavigationEvent -> navigateTo(event)
-            is ViewActionEvent -> event.action(this)
-            is PermissionEvent -> withPermissions(*event.permissions.toTypedArray()) {
-                onSuccess { event.callback.onNext(true) }
-                onFailure {
-                    event.callback.onNext(false)
-                    event.callback.onError(SecurityException("User refused permissions"))
-                }
-            }
-        }
-    }
-
-    override fun onSimpleEventDispatched(event: Int) {
-        super.onSimpleEventDispatched(event)
-        when (event) {
-            Navigation.Main.OPEN_NAV -> openNav()
-        }
-    }
-
-    private fun openNav() = binding.drawerLayout.openDrawer(GravityCompat.START)
-
-    private fun checkHideSection() {
-        val menu = binding.navView.menu
-        menu.findItem(R.id.magiskHideFragment).isVisible = Info.env.isActive && Info.env.magiskHide
-        menu.findItem(R.id.modulesFragment).isVisible = Info.env.isActive
-        menu.findItem(R.id.reposFragment).isVisible = Info.isConnected.value && Info.env.isActive
-        menu.findItem(R.id.logFragment).isVisible = Info.env.isActive
-        menu.findItem(R.id.superuserFragment).isVisible = Utils.showSuperUser()
-    }
-
-    private fun FragNavTransactionOptions.Builder.customAnimations(options: MagiskAnimBuilder) =
-            customAnimations(options.enter, options.exit, options.popEnter, options.popExit).apply {
-                if (!options.anySet) {
-                    transition(FragmentTransaction.TRANSIT_FRAGMENT_OPEN)
-                }
-            }
-
-    override val numberOfRootFragments: Int get() = baseFragments.size
-
-    override fun getRootFragment(index: Int) = baseFragments[index].java.newInstance()
-
-    override fun onTabTransaction(fragment: Fragment?, index: Int) {
-        val fragmentId = when (fragment) {
-            is HomeFragment -> R.id.magiskFragment
-            is SuperuserFragment -> R.id.superuserFragment
-            is MagiskHideFragment -> R.id.magiskHideFragment
-            is ModulesFragment -> R.id.modulesFragment
-            is ReposFragment -> R.id.reposFragment
-            is LogFragment -> R.id.logFragment
-            is SettingsFragment -> R.id.settings
-            else -> return
-        }
-        binding.navView.setCheckedItem(fragmentId)
-    }
-
-    override fun navigateTo(event: MagiskNavigationEvent) {
-        val directions = event.navDirections
-
-        navigationController.defaultTransactionOptions = FragNavTransactionOptions.newBuilder()
-                .customAnimations(event.animOptions)
-                .build()
-
-        navigationController.currentStack
-                ?.indexOfFirst { it.javaClass == event.navOptions.popUpTo }
-                ?.let { if (it == -1) null else it } // invalidate if class is not found
-                ?.let { if (event.navOptions.inclusive) it + 1 else it }
-                ?.let { navigationController.popFragments(it) }
-
-        when (directions.isActivity) {
-            true -> navigateToActivity(event)
-            else -> navigateToFragment(event)
-        }
-    }
-
-    private fun navigateToActivity(event: MagiskNavigationEvent) {
-        val destination = event.navDirections.destination?.java ?: let {
-            Timber.e("Cannot navigate to null destination")
-            return
-        }
-        val options = event.navOptions
-
-        Intent(this, destination)
-                .putExtras(event.navDirections.args)
-                .apply {
-                    if (options.singleTop) addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                    if (options.clearTask) addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                }
-                .let { startActivity(it) }
-    }
-
-    private fun navigateToFragment(event: MagiskNavigationEvent) {
-        val destination = event.navDirections.destination?.java ?: let {
-            Timber.e("Cannot navigate to null destination")
-            return
-        }
-
-        when (val index = baseFragments.indexOfFirst { it.java.name == destination.name }) {
-            -1 -> destination.newInstance()
-                    .apply { arguments = event.navDirections.args }
-                    .let { navigationController.pushFragment(it) }
-            // When it's desired that fragments of same class are put on top of one another edit this
-            else -> navigationController.switchTab(index)
-        }
-    }
-
-    override fun onFragmentTransaction(
-            fragment: Fragment?,
-            transactionType: FragNavController.TransactionType
-    ) = Unit
 }

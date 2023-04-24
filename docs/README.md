@@ -1,14 +1,13 @@
 # Magisk Documentation
-(Updated on 2019.9.19)
 
-- [Installation](install.md)
-- [Tutorials](tutorials.md)
-    - [OTA Installation](tutorials.md#ota-installation)
-    - [Best Practices for MagiskHide](tutorials.md#best-practices-for-magiskhide)
+- [Installation Instructions](install.md)
+- [Frequently Asked Questions](faq.md)
+- [Release Notes](releases/index.md)
+- [Magisk Changelog](changes.md)
 
 The following sections are for developers
 
-- [Magisk Details](details.md)
-- [Magisk Tools](tools.md)
 - [Developer Guides](guides.md)
-- [Deployment](deploy.md)
+- [Magisk Tools](tools.md)
+- [Internal Details](details.md)
+- [Android Booting Shenanigans](boot.md)

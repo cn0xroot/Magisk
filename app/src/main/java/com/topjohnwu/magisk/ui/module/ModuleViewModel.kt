@@ -1,111 +1,101 @@
 package com.topjohnwu.magisk.ui.module
 
-import android.content.res.Resources
+import android.net.Uri
+import androidx.databinding.Bindable
+import androidx.lifecycle.MutableLiveData
 import com.topjohnwu.magisk.BR
 import com.topjohnwu.magisk.R
-import com.topjohnwu.magisk.base.viewmodel.BaseViewModel
-import com.topjohnwu.magisk.data.database.RepoDao
-import com.topjohnwu.magisk.databinding.ComparableRvItem
-import com.topjohnwu.magisk.extensions.*
-import com.topjohnwu.magisk.model.entity.module.Module
-import com.topjohnwu.magisk.model.entity.recycler.ModuleRvItem
-import com.topjohnwu.magisk.model.entity.recycler.RepoRvItem
-import com.topjohnwu.magisk.model.entity.recycler.SectionRvItem
-import com.topjohnwu.magisk.model.events.InstallModuleEvent
-import com.topjohnwu.magisk.model.events.OpenChangelogEvent
-import com.topjohnwu.magisk.model.events.OpenFilePickerEvent
-import com.topjohnwu.magisk.tasks.RepoUpdater
-import com.topjohnwu.magisk.utils.DiffObservableList
-import com.topjohnwu.magisk.utils.KObservableField
-import io.reactivex.Single
-import io.reactivex.disposables.Disposable
-import me.tatarka.bindingcollectionadapter2.OnItemBind
+import com.topjohnwu.magisk.arch.AsyncLoadViewModel
+import com.topjohnwu.magisk.core.Info
+import com.topjohnwu.magisk.core.base.ContentResultCallback
+import com.topjohnwu.magisk.core.model.module.LocalModule
+import com.topjohnwu.magisk.core.model.module.OnlineModule
+import com.topjohnwu.magisk.databinding.MergeObservableList
+import com.topjohnwu.magisk.databinding.RvItem
+import com.topjohnwu.magisk.databinding.bindExtra
+import com.topjohnwu.magisk.databinding.diffList
+import com.topjohnwu.magisk.databinding.set
+import com.topjohnwu.magisk.dialog.LocalModuleInstallDialog
+import com.topjohnwu.magisk.dialog.OnlineModuleInstallDialog
+import com.topjohnwu.magisk.events.GetContentEvent
+import com.topjohnwu.magisk.events.SnackbarEvent
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.parcelize.Parcelize
 
-class ModuleViewModel(
-    private val resources: Resources,
-    private val repoUpdater: RepoUpdater,
-    private val repoDB: RepoDao
-) : BaseViewModel() {
+class ModuleViewModel : AsyncLoadViewModel() {
 
-    val query = KObservableField("")
+    val bottomBarBarrierIds = intArrayOf(R.id.module_update, R.id.module_remove)
 
-    private val allItems = mutableListOf<ComparableRvItem<*>>()
+    private val itemsInstalled = diffList<LocalModuleRvItem>()
 
-    val itemsInstalled = DiffObservableList(ComparableRvItem.callback)
-    val itemsRemote = DiffObservableList(ComparableRvItem.callback)
-    val itemBinding = OnItemBind<ComparableRvItem<*>> { itemBinding, _, item ->
-        item.bind(itemBinding)
-        itemBinding.bindExtra(BR.viewModel, this@ModuleViewModel)
+    val items = MergeObservableList<RvItem>()
+    val extraBindings = bindExtra {
+        it.put(BR.viewModel, this)
     }
 
-    private var queryDisposable: Disposable? = null
+    val data get() = uri
 
-    init {
-        query.addOnPropertyChangedCallback {
-            queryDisposable?.dispose()
-            queryDisposable = query()
+    @get:Bindable
+    var loading = true
+        private set(value) = set(value, field, { field = it }, BR.loading)
+
+    override suspend fun doLoadWork() {
+        loading = true
+        val moduleLoaded = Info.env.isActive &&
+                withContext(Dispatchers.IO) { LocalModule.loaded() }
+        if (moduleLoaded) {
+            loadInstalled()
+            if (items.isEmpty()) {
+                items.insertItem(InstallModule)
+                    .insertList(itemsInstalled)
+            }
         }
-        refresh(false)
+        loading = false
+        loadUpdateInfo()
     }
 
-    fun fabPressed() = OpenFilePickerEvent().publish()
-    fun repoPressed(item: RepoRvItem) = OpenChangelogEvent(item.item).publish()
-    fun downloadPressed(item: RepoRvItem) = InstallModuleEvent(item.item).publish()
+    override fun onNetworkChanged(network: Boolean) = startLoading()
 
-    fun refresh(force: Boolean) {
-        Single.fromCallable { Module.loadModules() }
-            .flattenAsFlowable { it }
-            .map { ModuleRvItem(it) }
-            .toList()
-            .map { it to itemsInstalled.calculateDiff(it) }
-            .doOnSuccessUi { itemsInstalled.update(it.first, it.second) }
-            .flatMap { repoUpdater(force) }
-            .flattenAsFlowable { repoDB.repos }
-            .map { RepoRvItem(it) }
-            .toList()
-            .doOnSuccess { allItems.update(it) }
-            .flatMap { queryRaw() }
-            .applyViewModel(this)
-            .subscribeK { itemsRemote.update(it.first, it.second) }
+    private suspend fun loadInstalled() {
+        withContext(Dispatchers.Default) {
+            val installed = LocalModule.installed().map { LocalModuleRvItem(it) }
+            itemsInstalled.update(installed)
+        }
     }
 
-    private fun query() = queryRaw()
-        .subscribeK { itemsRemote.update(it.first, it.second) }
-
-    private fun queryRaw(query: String = this.query.value) = allItems.toSingle()
-        .map { it.filterIsInstance<RepoRvItem>() }
-        .flattenAsFlowable { it }
-        .filter {
-            it.item.name.contains(query, ignoreCase = true) ||
-                    it.item.author.contains(query, ignoreCase = true) ||
-                    it.item.description.contains(query, ignoreCase = true)
+    private suspend fun loadUpdateInfo() {
+        withContext(Dispatchers.IO) {
+            itemsInstalled.forEach {
+                if (it.item.fetch())
+                    it.fetchedUpdateInfo()
+            }
         }
-        .toList()
-        .map { if (query.isEmpty()) it.divide() else it }
-        .map { it to itemsRemote.calculateDiff(it) }
+    }
 
-    private fun List<RepoRvItem>.divide(): List<ComparableRvItem<*>> {
-        val installed = itemsInstalled.filterIsInstance<ModuleRvItem>()
-
-        fun <T : ComparableRvItem<*>> List<T>.withTitle(text: Int) =
-            if (isEmpty()) this else listOf(SectionRvItem(resources.getString(text))) + this
-
-        val groupedItems = groupBy { repo ->
-            installed.firstOrNull { it.item.id == repo.item.id }?.let {
-                if (it.item.versionCode < repo.item.versionCode) MODULE_UPDATABLE
-                else MODULE_INSTALLED
-            } ?: MODULE_REMOTE
+    fun downloadPressed(item: OnlineModule?) =
+        if (item != null && Info.isConnected.value == true) {
+            withExternalRW { OnlineModuleInstallDialog(item).show() }
+        } else {
+            SnackbarEvent(R.string.no_connection).publish()
         }
 
-        return groupedItems.getOrElse(MODULE_UPDATABLE) { listOf() }.withTitle(R.string.update_available) +
-                groupedItems.getOrElse(MODULE_INSTALLED) { listOf() }.withTitle(R.string.installed) +
-                groupedItems.getOrElse(MODULE_REMOTE) { listOf() }.withTitle(R.string.not_installed)
+    fun installPressed() = withExternalRW {
+        GetContentEvent("application/zip", UriCallback()).publish()
+    }
+
+    fun requestInstallLocalModule(uri: Uri, displayName: String) {
+        LocalModuleInstallDialog(this, uri, displayName).show()
+    }
+
+    @Parcelize
+    class UriCallback : ContentResultCallback {
+        override fun onActivityResult(result: Uri) {
+            uri.value = result
+        }
     }
 
     companion object {
-        protected const val MODULE_INSTALLED = 0
-        protected const val MODULE_REMOTE = 1
-        protected const val MODULE_UPDATABLE = 2
+        private val uri = MutableLiveData<Uri?>()
     }
-
 }

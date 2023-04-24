@@ -8,67 +8,71 @@ import android.app.Service;
 import android.content.BroadcastReceiver;
 import android.content.ContentProvider;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 
-import com.topjohnwu.magisk.dummy.DummyActivity;
 import com.topjohnwu.magisk.dummy.DummyProvider;
 import com.topjohnwu.magisk.dummy.DummyReceiver;
 import com.topjohnwu.magisk.dummy.DummyService;
-import com.topjohnwu.magisk.obfuscate.Mapping;
 
 @SuppressLint("NewApi")
 public class DelegateComponentFactory extends AppComponentFactory {
 
-    ClassLoader loader;
-    AppComponentFactory delegate;
+    AppComponentFactory receiver;
+
+    public DelegateComponentFactory() {
+        DynLoad.componentFactory = this;
+    }
+
+    @Override
+    public ClassLoader instantiateClassLoader(ClassLoader cl, ApplicationInfo info) {
+        return new DelegateClassLoader();
+    }
 
     @Override
     public Application instantiateApplication(ClassLoader cl, String className) {
-        if (loader == null) loader = cl;
-        return new DelegateApplication(this);
+        return new DelegateApplication();
     }
 
     @Override
     public Activity instantiateActivity(ClassLoader cl, String className, Intent intent)
             throws ClassNotFoundException, IllegalAccessException, InstantiationException {
-        if (delegate != null)
-            return delegate.instantiateActivity(loader, Mapping.get(className), intent);
-        return create(className, DummyActivity.class);
+        if (receiver != null)
+            return receiver.instantiateActivity(DynLoad.activeClassLoader, className, intent);
+        return create(className, DownloadActivity.class);
     }
 
     @Override
     public BroadcastReceiver instantiateReceiver(ClassLoader cl, String className, Intent intent)
             throws ClassNotFoundException, IllegalAccessException, InstantiationException {
-        if (delegate != null)
-            return delegate.instantiateReceiver(loader, Mapping.get(className), intent);
+        if (receiver != null)
+            return receiver.instantiateReceiver(DynLoad.activeClassLoader, className, intent);
         return create(className, DummyReceiver.class);
     }
 
     @Override
     public Service instantiateService(ClassLoader cl, String className, Intent intent)
             throws ClassNotFoundException, IllegalAccessException, InstantiationException {
-        if (delegate != null)
-            return delegate.instantiateService(loader, Mapping.get(className), intent);
+        if (receiver != null)
+            return receiver.instantiateService(DynLoad.activeClassLoader, className, intent);
         return create(className, DummyService.class);
     }
 
     @Override
     public ContentProvider instantiateProvider(ClassLoader cl, String className)
             throws ClassNotFoundException, IllegalAccessException, InstantiationException {
-        if (loader == null) loader = cl;
-        if (delegate != null)
-            return delegate.instantiateProvider(loader, Mapping.get(className));
+        if (receiver != null)
+            return receiver.instantiateProvider(DynLoad.activeClassLoader, className);
         return create(className, DummyProvider.class);
     }
 
-    /**
-     * Create the class or dummy implementation if creation failed
-     */
-    private <T> T create(String name, Class<? extends T> dummy)
-            throws InstantiationException, IllegalAccessException {
+    private <T> T create(String name, Class<T> fallback)
+            throws IllegalAccessException, InstantiationException {
         try {
-            return (T) loader.loadClass(name).newInstance();
-        } catch (IllegalAccessException | InstantiationException | ClassNotFoundException ignored) {
-            return dummy.newInstance();
+            // noinspection unchecked
+            return (T) DynLoad.activeClassLoader.loadClass(name).newInstance();
+        } catch (ClassNotFoundException e) {
+            return fallback.newInstance();
         }
     }
+
 }

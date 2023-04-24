@@ -3,9 +3,9 @@
 /local.properties
 .idea/
 /build
-app/release
 *.hprof
 .externalNativeBuild/
-public.certificate.x509.pem
-private.key.pk8
 *.apk
+src/*/assets
+src/*/jniLibs
+src/*/resources

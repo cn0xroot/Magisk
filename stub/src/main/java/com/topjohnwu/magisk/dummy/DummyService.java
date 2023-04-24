@@ -7,7 +7,6 @@ import android.os.IBinder;
 public class DummyService extends Service {
     @Override
     public IBinder onBind(Intent intent) {
-        stopSelf();
         return null;
     }
 }

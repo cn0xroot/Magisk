@@ -1,132 +1,81 @@
 package com.topjohnwu.magisk.ui.home
 
-import android.content.Context
-import com.topjohnwu.magisk.BuildConfig
-import com.topjohnwu.magisk.Const
-import com.topjohnwu.magisk.Info
+import android.os.Bundle
+import android.view.LayoutInflater
+import android.view.Menu
+import android.view.MenuInflater
+import android.view.MenuItem
+import android.view.View
+import android.view.ViewGroup
+import android.widget.ImageView
+import android.widget.TextView
+import androidx.core.view.MenuProvider
 import com.topjohnwu.magisk.R
-import com.topjohnwu.magisk.base.BaseActivity
-import com.topjohnwu.magisk.base.BaseFragment
-import com.topjohnwu.magisk.data.repository.MagiskRepository
-import com.topjohnwu.magisk.databinding.FragmentMagiskBinding
-import com.topjohnwu.magisk.extensions.DynamicClassLoader
-import com.topjohnwu.magisk.extensions.openUrl
-import com.topjohnwu.magisk.extensions.subscribeK
-import com.topjohnwu.magisk.extensions.writeTo
-import com.topjohnwu.magisk.model.events.*
-import com.topjohnwu.magisk.utils.SafetyNetHelper
-import com.topjohnwu.magisk.view.MarkDownWindow
-import com.topjohnwu.magisk.view.dialogs.*
-import com.topjohnwu.superuser.Shell
-import dalvik.system.DexFile
-import io.reactivex.Completable
-import org.koin.android.ext.android.inject
-import org.koin.androidx.viewmodel.ext.android.viewModel
-import java.io.File
-import java.lang.reflect.InvocationHandler
+import com.topjohnwu.magisk.arch.BaseFragment
+import com.topjohnwu.magisk.arch.viewModel
+import com.topjohnwu.magisk.core.Info
+import com.topjohnwu.magisk.core.download.DownloadService
+import com.topjohnwu.magisk.databinding.FragmentHomeMd2Binding
 
-class HomeFragment : BaseFragment<HomeViewModel, FragmentMagiskBinding>(),
-    SafetyNetHelper.Callback {
+class HomeFragment : BaseFragment<FragmentHomeMd2Binding>(), MenuProvider {
 
-    override val layoutRes: Int = R.layout.fragment_magisk
-    override val viewModel: HomeViewModel by viewModel()
-
-    private val magiskRepo: MagiskRepository by inject()
-    private val EXT_APK by lazy { File("${activity.filesDir.parent}/snet", "snet.jar") }
-    private val EXT_DEX by lazy { File(EXT_APK.parent, "snet.dex") }
-
-    override fun onResponse(responseCode: Int) = viewModel.finishSafetyNetCheck(responseCode)
-
-    override fun onEventDispatched(event: ViewEvent) {
-        super.onEventDispatched(event)
-        when (event) {
-            is OpenLinkEvent -> activity.openUrl(event.url)
-            is ManagerInstallEvent -> installManager()
-            is MagiskInstallEvent -> installMagisk()
-            is UninstallEvent -> uninstall()
-            is ManagerChangelogEvent -> changelogManager()
-            is EnvFixEvent -> fixEnv()
-            is UpdateSafetyNetEvent -> updateSafetyNet(false)
-        }
-    }
+    override val layoutRes = R.layout.fragment_home_md2
+    override val viewModel by viewModel<HomeViewModel>()
 
     override fun onStart() {
         super.onStart()
-        setHasOptionsMenu(true)
-        requireActivity().setTitle(R.string.magisk)
+        activity?.setTitle(R.string.section_home)
+        DownloadService.observeProgress(this, viewModel::onProgressUpdate)
     }
 
-    private fun installMagisk() {
-        // Show Manager update first
-        if (Info.remote.app.versionCode > BuildConfig.VERSION_CODE) {
-            installManager()
-            return
-        }
-
-        MagiskInstallDialog(requireActivity() as BaseActivity<*, *>).show()
-    }
-
-    private fun installManager() = ManagerInstallDialog(requireActivity()).show()
-    private fun uninstall() = UninstallDialog(requireActivity()).show()
-    private fun fixEnv() = EnvFixDialog(requireActivity()).show()
-
-    private fun changelogManager() = MarkDownWindow
-        .show(requireActivity(), null, resources.openRawResource(R.raw.changelog))
-
-    private fun downloadSafetyNet(requiresUserInput: Boolean = true) {
-        fun download() = magiskRepo.fetchSafetynet()
-                .map { it.byteStream().writeTo(EXT_APK) }
-                .subscribeK { updateSafetyNet(true) }
-
-        if (!requiresUserInput) {
-            download()
-            return
-        }
-
-        CustomAlertDialog(requireActivity())
-            .setTitle(R.string.proprietary_title)
-            .setMessage(R.string.proprietary_notice)
-            .setCancelable(false)
-            .setPositiveButton(android.R.string.yes) { _, _ -> download() }
-            .setNegativeButton(android.R.string.no) { _, _ -> viewModel.finishSafetyNetCheck(-2) }
-            .show()
-    }
-
-    private fun updateSafetyNet(dieOnError: Boolean) {
-        Completable.fromAction {
-            val loader = DynamicClassLoader(EXT_APK)
-            val dex = DexFile.loadDex(EXT_APK.path, EXT_DEX.path, 0)
-
-            // Scan through the dex and find our helper class
-            var helperClass: Class<*>? = null
-            for (className in dex.entries()) {
-                if (className.startsWith("x.")) {
-                    val cls = loader.loadClass(className)
-                    if (InvocationHandler::class.java.isAssignableFrom(cls)) {
-                        helperClass = cls
-                        break
-                    }
+    private fun checkTitle(text: TextView, icon: ImageView) {
+        text.post {
+            if (text.layout?.getEllipsisCount(0) != 0) {
+                with (icon) {
+                    layoutParams.width = 0
+                    layoutParams.height = 0
+                    requestLayout()
                 }
             }
-            helperClass ?: throw Exception()
+        }
+    }
 
-            val helper = helperClass.getMethod("get",
-                    Class::class.java, Context::class.java, Any::class.java)
-                    .invoke(null, SafetyNetHelper::class.java, activity, this) as SafetyNetHelper
+    override fun onCreateView(
+        inflater: LayoutInflater,
+        container: ViewGroup?,
+        savedInstanceState: Bundle?
+    ): View {
+        super.onCreateView(inflater, container, savedInstanceState)
 
-            if (helper.version < Const.SNET_EXT_VER)
-                throw Exception()
+        // If titles are squished, hide icons
+        with(binding.homeMagiskWrapper) {
+            checkTitle(homeMagiskTitle, homeMagiskIcon)
+        }
+        with(binding.homeManagerWrapper) {
+            checkTitle(homeManagerTitle, homeManagerIcon)
+        }
 
-            helper.attest()
-        }.subscribeK(onError = {
-            if (dieOnError) {
-                viewModel.finishSafetyNetCheck(-1)
-            } else {
-                Shell.sh("rm -rf " + EXT_APK.parent).exec()
-                EXT_APK.parentFile?.mkdir()
-                downloadSafetyNet(!dieOnError)
-            }
-        })
+        return binding.root
+    }
+
+    override fun onCreateMenu(menu: Menu, inflater: MenuInflater) {
+        inflater.inflate(R.menu.menu_home_md2, menu)
+        if (!Info.isRooted)
+            menu.removeItem(R.id.action_reboot)
+    }
+
+    override fun onMenuItemSelected(item: MenuItem): Boolean {
+        when (item.itemId) {
+            R.id.action_settings ->
+                HomeFragmentDirections.actionHomeFragmentToSettingsFragment().navigate()
+            R.id.action_reboot -> activity?.let { RebootMenu.inflate(it).show() }
+            else -> return super.onOptionsItemSelected(item)
+        }
+        return true
+    }
+
+    override fun onResume() {
+        super.onResume()
+        viewModel.stateManagerProgress = 0
     }
 }
-

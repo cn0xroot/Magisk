@@ -1,51 +1,63 @@
-# Add project specific ProGuard rules here.
-# By default, the flags in this file are appended to flags specified
-# in /Users/topjohnwu/Library/Android/sdk/tools/proguard/proguard-android.txt
-# You can edit the include path and order by changing the proguardFiles
-# directive in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
-
-# Add any project specific keep options here:
-
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
-
-# Snet
--keepclassmembers class com.topjohnwu.magisk.utils.SafetyNetHelper { *; }
--keep,allowobfuscation interface com.topjohnwu.magisk.utils.SafetyNetHelper$Callback
--keepclassmembers class * implements com.topjohnwu.magisk.utils.SafetyNetHelper$Callback {
-  void onResponse(int);
+# Parcelable
+-keepclassmembers class * implements android.os.Parcelable {
+    public static final ** CREATOR;
 }
 
-# Keep all fragment constructors
--keepclassmembers class * extends androidx.fragment.app.Fragment {
-  public <init>(...);
+# Kotlin
+-assumenosideeffects class kotlin.jvm.internal.Intrinsics {
+	public static void check*(...);
+	public static void throw*(...);
+}
+-assumenosideeffects class java.util.Objects {
+    public static ** requireNonNull(...);
+}
+-assumenosideeffects public class kotlin.coroutines.jvm.internal.DebugMetadataKt {
+   private static ** getDebugMetadataAnnotation(...) return null;
 }
 
-# DelegateWorker
--keep,allowobfuscation class * extends com.topjohnwu.magisk.base.DelegateWorker
+# Stub
+-keep class com.topjohnwu.magisk.core.App { <init>(java.lang.Object); }
+-keepclassmembers class androidx.appcompat.app.AppCompatDelegateImpl {
+  boolean mActivityHandlesConfigFlagsChecked;
+  int mActivityHandlesConfigFlags;
+}
 
-# BootSigner
--keep class a.a { *; }
+# main
+-keep,allowoptimization public class com.topjohnwu.magisk.signing.SignBoot {
+    public static void main(java.lang.String[]);
+}
 
-# Workaround R8 bug
--keep,allowobfuscation class com.topjohnwu.magisk.model.receiver.GeneralReceiver
--keepclassmembers class a.e { *; }
+# Strip Timber verbose and debug logging
+-assumenosideeffects class timber.log.Timber$Tree {
+  public void v(**);
+  public void d(**);
+}
 
-# Strip logging
--assumenosideeffects class timber.log.Timber.Tree { *; }
+# https://github.com/square/retrofit/issues/3751#issuecomment-1192043644
+# Keep generic signature of Call, Response (R8 full mode strips signatures from non-kept items).
+-keep,allowobfuscation,allowshrinking interface retrofit2.Call
+-keep,allowobfuscation,allowshrinking class retrofit2.Response
+
+# With R8 full mode generic signatures are stripped for classes that are not
+# kept. Suspend functions are wrapped in continuations where the type argument
+# is used.
+-keep,allowobfuscation,allowshrinking class kotlin.coroutines.Continuation
+
 
 # Excessive obfuscation
 -repackageclasses 'a'
 -allowaccessmodification
 
-# QOL
--dontnote **
--dontwarn com.caverock.androidsvg.**
--dontwarn ru.noties.markwon.**
+-obfuscationdictionary ../dict.txt
+-classobfuscationdictionary ../dict.txt
+-packageobfuscationdictionary ../dict.txt
+
+-dontwarn org.bouncycastle.jsse.BCSSLParameters
+-dontwarn org.bouncycastle.jsse.BCSSLSocket
+-dontwarn org.bouncycastle.jsse.provider.BouncyCastleJsseProvider
+-dontwarn org.commonmark.ext.gfm.strikethrough.Strikethrough
+-dontwarn org.conscrypt.Conscrypt*
+-dontwarn org.conscrypt.ConscryptHostnameVerifier
+-dontwarn org.openjsse.javax.net.ssl.SSLParameters
+-dontwarn org.openjsse.javax.net.ssl.SSLSocket
+-dontwarn org.openjsse.net.ssl.OpenJSSE

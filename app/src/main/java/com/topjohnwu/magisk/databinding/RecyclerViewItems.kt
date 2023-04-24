@@ -1,48 +1,35 @@
 package com.topjohnwu.magisk.databinding
 
-import androidx.annotation.CallSuper
+import androidx.databinding.PropertyChangeRegistry
 import androidx.databinding.ViewDataBinding
-import com.topjohnwu.magisk.BR
-import com.topjohnwu.magisk.utils.DiffObservableList
-import me.tatarka.bindingcollectionadapter2.ItemBinding
+import androidx.recyclerview.widget.RecyclerView
 
 abstract class RvItem {
-
     abstract val layoutRes: Int
-
-    @CallSuper
-    open fun bind(binding: ItemBinding<*>) {
-        binding.set(BR.item, layoutRes)
-    }
-
-    /**
-     * This callback is useful if you want to manipulate your views directly.
-     * If you want to use this callback, you must set [me.tatarka.bindingcollectionadapter2.BindingRecyclerViewAdapter]
-     * on your RecyclerView and call it from there. You can use [BindingBoundAdapter] for your convenience.
-     */
-    open fun onBindingBound(binding: ViewDataBinding) {}
 }
 
-abstract class ComparableRvItem<in T> : RvItem() {
+abstract class ObservableRvItem : RvItem(), ObservableHost {
+    override var callbacks: PropertyChangeRegistry? = null
+}
 
-    abstract fun itemSameAs(other: T): Boolean
-    abstract fun contentSameAs(other: T): Boolean
-    @Suppress("UNCHECKED_CAST")
-    open fun genericItemSameAs(other: Any): Boolean = other::class == this::class && itemSameAs(other as T)
-    @Suppress("UNCHECKED_CAST")
-    open fun genericContentSameAs(other: Any): Boolean = other::class == this::class && contentSameAs(other as T)
+interface ItemWrapper<E> {
+    val item: E
+}
 
-    companion object {
-        val callback = object : DiffObservableList.Callback<ComparableRvItem<*>> {
-            override fun areItemsTheSame(
-                oldItem: ComparableRvItem<*>,
-                newItem: ComparableRvItem<*>
-            ) = oldItem.genericItemSameAs(newItem)
+interface ViewAwareItem {
+    fun onBind(binding: ViewDataBinding, recyclerView: RecyclerView)
+}
 
-            override fun areContentsTheSame(
-                oldItem: ComparableRvItem<*>,
-                newItem: ComparableRvItem<*>
-            ) = oldItem.genericContentSameAs(newItem)
+interface DiffItem<T : Any> {
+
+    fun itemSameAs(other: T): Boolean {
+        if (this === other) return true
+        return when (this) {
+            is ItemWrapper<*> -> item == (other as ItemWrapper<*>).item
+            is Comparable<*> -> compareValues(this, other as Comparable<*>) == 0
+            else -> this == other
         }
     }
+
+    fun contentSameAs(other: T) = true
 }
